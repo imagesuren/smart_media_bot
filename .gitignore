@@ -1,0 +1,12 @@
+cat > .gitignore << 'EOF'
+venv/
+.venv/
+.env
+user_data.json
+downloads/
+__pycache__/
+*.pyc
+.DS_Store
+*.mp4
+*.mp3
+EOF
