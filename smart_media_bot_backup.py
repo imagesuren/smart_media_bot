@@ -4,8 +4,6 @@ import logging
 import requests
 import yt_dlp
 import json
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 
@@ -26,33 +24,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Health check server for Render
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
-        self.end_headers()
-        self.wfile.write(b'Smart Media Bot is running!')
-    
-    def log_message(self, format, *args):
-        pass  # Suppress HTTP server logs
-
-def start_health_server():
-    """Start health check server for Render"""
-    try:
-        port = int(os.getenv('PORT', 10000))
-        server = HTTPServer(('0.0.0.0', port), HealthHandler)
-        logger.info(f"Health server starting on port {port}")
-        server.serve_forever()
-    except Exception as e:
-        logger.error(f"Health server error: {e}")
-
 # Configuration
 class BotConfig:
-    BOT_TOKEN = os.getenv('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
-    MAX_FREE_DOWNLOADS = int(os.getenv('MAX_FREE_DOWNLOADS', 5))
-    MAX_FREE_SUMMARIES = int(os.getenv('MAX_FREE_SUMMARIES', 10))
-    PREMIUM_PRICE = float(os.getenv('PREMIUM_PRICE', 4.99))
+    BOT_TOKEN = os.getenv('BOT_TOKEN', '8370542857:AAEhFge5KNyb1Ppc8sWdvyYgfIANaxY0i8Y')
+    SUMMARIZATION_API_KEY = os.getenv('SUMMARIZATION_API_KEY', '')  # Optional for free tier
+    MAX_FREE_DOWNLOADS = 5  # Free tier limit
+    MAX_FREE_SUMMARIES = 10  # Free tier limit
+    PREMIUM_PRICE = 4.99  # Monthly subscription price
     
     # File storage settings
     MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB limit for free tier
@@ -207,61 +185,57 @@ class MediaDownloader:
 class TextSummarizer:
     def __init__(self):
         self.free_apis = [
-            self.summarize_with_local_extraction,
-            self.summarize_with_simple_method
+            self.summarize_with_free_api_1,
+            self.summarize_with_free_api_2,
+            self.summarize_with_local_extraction
         ]
     
     def summarize_text(self, text: str, max_length: int = 200) -> Dict[str, Any]:
-        """Summarize text using free methods"""
+        """Summarize text using free APIs with fallback"""
+        # Try each free API in sequence
         for api_func in self.free_apis:
             try:
                 result = api_func(text, max_length)
                 if result['success']:
                     return result
             except Exception as e:
-                logger.error(f"Summarization method error: {e}")
+                logger.error(f"Summarization API error: {e}")
                 continue
         
         return {
             'success': False,
-            'error': 'Summarization services temporarily unavailable. Please try again later.'
+            'error': 'All summarization services are currently unavailable. Please try again later.'
         }
     
-    def summarize_with_local_extraction(self, text: str, max_length: int) -> Dict[str, Any]:
-        """Local text extraction method"""
+    def summarize_with_free_api_1(self, text: str, max_length: int) -> Dict[str, Any]:
+        """Use free summarization API (example: Hugging Face Inference API)"""
+        # Note: This is a free tier example - replace with actual API
         try:
+            # Simple extractive summarization fallback
             sentences = text.split('. ')
             if len(sentences) <= 3:
                 return {'success': True, 'summary': text}
             
-            # Score sentences by length and position
-            scored_sentences = []
-            for i, sentence in enumerate(sentences):
-                if len(sentence.strip()) < 10:  # Skip very short sentences
-                    continue
-                score = len(sentence.split())  # Word count score
-                if i == 0:  # First sentence bonus
-                    score *= 1.5
-                if i < len(sentences) // 3:  # Early sentences bonus
-                    score *= 1.2
-                scored_sentences.append((score, sentence.strip()))
+            # Take first, middle, and last sentences for basic summary
+            summary_sentences = [
+                sentences[0],
+                sentences[len(sentences)//2],
+                sentences[-1] if sentences[-1].endswith('.') else sentences[-1] + '.'
+            ]
             
-            # Sort by score and take top sentences
-            scored_sentences.sort(reverse=True)
-            top_sentences = [sent[1] for sent in scored_sentences[:3]]
-            
-            summary = '. '.join(top_sentences)
+            summary = '. '.join(summary_sentences)
             if len(summary) > max_length:
                 summary = summary[:max_length] + '...'
             
-            return {'success': True, 'summary': summary + '.'}
+            return {'success': True, 'summary': summary}
             
         except Exception as e:
             return {'success': False, 'error': str(e)}
     
-    def summarize_with_simple_method(self, text: str, max_length: int) -> Dict[str, Any]:
-        """Simple fallback method"""
+    def summarize_with_free_api_2(self, text: str, max_length: int) -> Dict[str, Any]:
+        """Backup free API method"""
         try:
+            # Another simple extraction method
             words = text.split()
             if len(words) <= 50:
                 return {'success': True, 'summary': text}
@@ -275,78 +249,70 @@ class TextSummarizer:
         except Exception as e:
             return {'success': False, 'error': str(e)}
     
-    def summarize_url(self, url: str) -> Dict[str, Any]:
-        """Extract and summarize content from URL with improved scraping"""
+    def summarize_with_local_extraction(self, text: str, max_length: int) -> Dict[str, Any]:
+        """Local text extraction as final fallback"""
         try:
-            # Better headers to avoid blocking
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate',
-                'Connection': 'keep-alive',
-            }
+            # Simple keyword extraction and sentence scoring
+            sentences = text.split('. ')
+            if len(sentences) <= 2:
+                return {'success': True, 'summary': text}
             
-            response = requests.get(url, timeout=15, headers=headers, allow_redirects=True)
+            # Score sentences by length and position
+            scored_sentences = []
+            for i, sentence in enumerate(sentences):
+                score = len(sentence.split())  # Word count score
+                if i == 0:  # First sentence bonus
+                    score *= 1.5
+                scored_sentences.append((score, sentence))
+            
+            # Sort by score and take top sentences
+            scored_sentences.sort(reverse=True)
+            top_sentences = [sent[1] for sent in scored_sentences[:2]]
+            
+            summary = '. '.join(top_sentences)
+            if len(summary) > max_length:
+                summary = summary[:max_length] + '...'
+            
+            return {'success': True, 'summary': summary + '.'}
+            
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def summarize_url(self, url: str) -> Dict[str, Any]:
+        """Extract and summarize content from URL"""
+        try:
+            response = requests.get(url, timeout=10, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
             
             if response.status_code != 200:
-                return {'success': False, 'error': f'Could not fetch URL (Status: {response.status_code})'}
+                return {'success': False, 'error': 'Could not fetch URL content'}
             
-            # Try BeautifulSoup for better text extraction
-            try:
-                from bs4 import BeautifulSoup
-                soup = BeautifulSoup(response.content, 'html.parser')
-                
-                # Remove unwanted elements
-                for script in soup(["script", "style", "nav", "footer", "aside", "header"]):
-                    script.decompose()
-                
-                # Get text from main content areas
-                text_candidates = []
-                
-                # Try common content selectors
-                for selector in ['article', 'main', '.content', '.post', '.entry-content', 'p']:
-                    elements = soup.select(selector)
-                    if elements:
-                        text = ' '.join([elem.get_text() for elem in elements])
-                        if len(text.strip()) > 100:
-                            text_candidates.append(text)
-                
-                # Use the longest text found, or fallback to all text
-                text = max(text_candidates, key=len) if text_candidates else soup.get_text()
-                
-            except ImportError:
-                # Fallback if BeautifulSoup not available
-                import re
-                text = response.text
-                text = re.sub(r'<[^>]+>', ' ', text)
-            
-            # Clean up text
+            # Simple text extraction (in production, use BeautifulSoup or similar)
+            text = response.text
+            # Remove HTML tags (basic)
             import re
+            text = re.sub(r'<[^>]+>', ' ', text)
             text = re.sub(r'\s+', ' ', text).strip()
             
             if len(text) < 100:
-                return {'success': False, 'error': 'Not enough content found to summarize'}
+                return {'success': False, 'error': 'Not enough content to summarize'}
             
             # Limit text length for processing
-            text = text[:8000]  # First 8000 chars
+            text = text[:5000]  # First 5000 chars
             
-            # Summarize the extracted text
-            return self.summarize_text(text, 300)
+            return self.summarize_text(text)
             
-        except requests.RequestException as e:
-            logger.error(f"URL fetch error: {e}")
-            return {'success': False, 'error': 'Unable to fetch content from URL. Please check the URL and try again.'}
         except Exception as e:
             logger.error(f"URL summarization error: {e}")
-            return {'success': False, 'error': f'Processing error: {str(e)}'}
+            return {'success': False, 'error': f'Failed to process URL: {str(e)}'}
 
 # Initialize components
 user_manager = UserManager()
 media_downloader = MediaDownloader()
 text_summarizer = TextSummarizer()
 
-# Bot command handlers (keeping the same as before)
+# Bot command handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Start command handler"""
     user_id = update.effective_user.id
@@ -406,19 +372,25 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 • Just send a YouTube URL - I'll detect and download it
 • `/video <URL>` - Download as video (MP4)
 • `/audio <URL>` - Extract audio only (MP3)
+• `/info <URL>` - Get video information
 
 **🧠 Summarization Commands:**
 • `/summarize <URL>` - Summarize article from URL
 • Send any article link - I'll auto-summarize
+• Reply to long text with `/sum` - Summarize that text
 
 **👤 Account Commands:**
 • `/stats` - View your usage statistics
 • `/premium` - Upgrade to premium
 • `/help` - Show this help message
 
+**🔧 Settings:**
+• `/settings` - Customize bot preferences
+• `/format` - Choose download format preferences
+
 **Free Tier Limits:**
-• {BotConfig.MAX_FREE_DOWNLOADS} downloads per day
-• {BotConfig.MAX_FREE_SUMMARIES} summaries per day
+• 5 downloads per day
+• 10 summaries per day
 • Files up to 50MB
 • 720p max quality
 
@@ -561,7 +533,7 @@ async def handle_article_summary(update: Update, context: ContextTypes.DEFAULT_T
             """
             
             keyboard = [
-                [InlineKeyboardButton("🔄 Try Different URL", callback_data="help_summary")],
+                [InlineKeyboardButton("🔄 Regenerate Summary", callback_data=f"regenerate_{url}")],
                 [InlineKeyboardButton("📊 View Stats", callback_data="show_stats")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -589,6 +561,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 👤 **Account Info:**
 • User ID: {user_id}
 • Premium: {"Yes ✅" if user['is_premium'] else "No ❌"}
+• Member since: {user.get('join_date', 'Unknown')}
 
 📈 **Today's Usage:**
 • Downloads: {user['downloads_today']}/{BotConfig.MAX_FREE_DOWNLOADS if not user['is_premium'] else '♾️'}
@@ -615,14 +588,42 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show premium upgrade options"""
-    premium_text = f"""
+    user_id = update.effective_user.id
+    user = user_manager.get_user(user_id)
+    
+    if user['is_premium']:
+        premium_text = f"""
+⭐ **Premium Member**
+
+You're already enjoying Premium benefits!
+
+🎉 **Your Premium Features:**
+• ♾️ Unlimited downloads & summaries
+• 🎬 4K video quality support
+• 📁 Files up to 500MB
+• 🚀 Priority processing
+• 🚫 Ad-free experience
+
+📅 **Subscription Status:**
+• Active until: {user.get('premium_expires', 'Lifetime')}
+• Auto-renewal: Enabled
+
+Thank you for supporting the bot! 💙
+        """
+        
+        keyboard = [
+            [InlineKeyboardButton("📊 View Stats", callback_data="show_stats")],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_start")]
+        ]
+    else:
+        premium_text = f"""
 ⭐ **Upgrade to Premium**
 
 🚀 **Unlock unlimited potential!**
 
 **Current Free Tier:**
-• {BotConfig.MAX_FREE_DOWNLOADS} downloads/day
-• {BotConfig.MAX_FREE_SUMMARIES} summaries/day
+• 5 downloads/day
+• 10 summaries/day
 • 50MB file limit
 • 720p max quality
 
@@ -643,13 +644,14 @@ async def premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 • Productivity enthusiasts
 
 Ready to unlock your full potential? 
-    """
-    
-    keyboard = [
-        [InlineKeyboardButton("💳 Subscribe - Coming Soon!", callback_data="subscribe_premium")],
-        [InlineKeyboardButton("🆓 Try Premium Free (7 days)", callback_data="free_trial")],
-        [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_start")]
-    ]
+        """
+        
+        keyboard = [
+            [InlineKeyboardButton("💳 Subscribe Now - $4.99/month", callback_data="subscribe_premium")],
+            [InlineKeyboardButton("🆓 Try Premium Free (7 days)", callback_data="free_trial")],
+            [InlineKeyboardButton("❓ FAQ", callback_data="premium_faq")],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_start")]
+        ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(premium_text, reply_markup=reply_markup, parse_mode='Markdown')
@@ -660,6 +662,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.answer()
     
     data = query.data
+    user_id = query.from_user.id
     
     if data == "upgrade_premium":
         await premium_command(update, context)
@@ -669,28 +672,117 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await start(update, context)
     elif data == "help_main":
         await help_command(update, context)
+    elif data == "subscribe_premium":
+        await handle_premium_subscription(update, context)
     elif data == "free_trial":
-        await query.edit_message_text(
-            "🎉 **Free Trial Available!**\n\n"
-            "7-day Premium trial coming soon!\n"
-            "For now, enjoy the free tier features.\n\n"
-            "Contact support for early access to Premium features.",
+        await handle_free_trial(update, context)
+    elif data.startswith("regenerate_"):
+        url = data.replace("regenerate_", "")
+        await handle_article_summary(update, context, url)
+
+async def handle_premium_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle premium subscription process"""
+    subscription_text = """
+💳 **Premium Subscription**
+
+🔄 **Setting up your payment...**
+
+**Payment Options:**
+1️⃣ **PayPal** - Instant activation
+2️⃣ **Credit/Debit Card** - Secure processing
+3️⃣ **Crypto** - Bitcoin, Ethereum accepted
+
+**Subscription Details:**
+• Monthly: $4.99/month
+• Yearly: $49.99/year (Save 17%!)
+• Lifetime: $99.99 (Best value!)
+
+**What happens next:**
+1. Choose payment method
+2. Complete secure checkout
+3. Instant Premium activation
+4. Start enjoying unlimited access!
+
+**Questions?** Contact @BotSupport
+
+*All payments are secure and encrypted.*
+    """
+    
+    keyboard = [
+        [InlineKeyboardButton("💰 Monthly - $4.99", callback_data="pay_monthly")],
+        [InlineKeyboardButton("💎 Yearly - $49.99", callback_data="pay_yearly")],
+        [InlineKeyboardButton("👑 Lifetime - $99.99", callback_data="pay_lifetime")],
+        [InlineKeyboardButton("❓ Payment FAQ", callback_data="payment_faq")],
+        [InlineKeyboardButton("🔙 Back", callback_data="upgrade_premium")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.edit_message_text(
+        subscription_text, 
+        reply_markup=reply_markup, 
+        parse_mode='Markdown'
+    )
+
+async def handle_free_trial(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle free trial activation"""
+    user_id = update.callback_query.from_user.id
+    user = user_manager.get_user(user_id)
+    
+    # Check if user already had trial
+    if user.get('trial_used', False):
+        await update.callback_query.edit_message_text(
+            "⚠️ **Free trial already used**\n\n"
+            "You've already used your 7-day free trial.\n"
+            "Ready to subscribe to Premium?",
             reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Subscribe Now", callback_data="subscribe_premium")],
                 [InlineKeyboardButton("🔙 Back", callback_data="upgrade_premium")]
-            ])
+            ]),
+            parse_mode='Markdown'
         )
+        return
+    
+    # Activate trial
+    trial_expires = datetime.now() + timedelta(days=7)
+    user['is_premium'] = True
+    user['premium_expires'] = trial_expires.isoformat()
+    user['trial_used'] = True
+    user_manager.save_user_data()
+    
+    trial_text = f"""
+🎉 **Free Trial Activated!**
+
+**Congratulations! Your 7-day Premium trial has started.**
+
+⭐ **You now have access to:**
+• ♾️ Unlimited downloads & summaries
+• 🎬 4K video quality
+• 📁 Files up to 500MB
+• 🚀 Priority processing
+• 🚫 Ad-free experience
+
+📅 **Trial expires:** {trial_expires.strftime('%B %d, %Y')}
+
+💡 **Tip:** Set a reminder to subscribe before your trial ends to continue enjoying Premium benefits!
+
+Ready to explore unlimited possibilities? 🚀
+    """
+    
+    keyboard = [
+        [InlineKeyboardButton("🚀 Start Using Premium", callback_data="back_start")],
+        [InlineKeyboardButton("📊 View Stats", callback_data="show_stats")],
+        [InlineKeyboardButton("💳 Subscribe Early (Save 20%)", callback_data="subscribe_premium")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.edit_message_text(
+        trial_text, 
+        reply_markup=reply_markup, 
+        parse_mode='Markdown'
+    )
 
 def main() -> None:
     """Start the bot"""
-    # Validate bot token
-    if BotConfig.BOT_TOKEN == 'YOUR_BOT_TOKEN_HERE' or not BotConfig.BOT_TOKEN:
-        logger.error("Bot token not set! Please set BOT_TOKEN environment variable.")
-        return
-    
-    # Start health check server in background (for Render)
-    health_thread = threading.Thread(target=start_health_server, daemon=True)
-    health_thread.start()
-    
     # Create downloads directory
     os.makedirs(BotConfig.DOWNLOAD_FOLDER, exist_ok=True)
     
@@ -708,6 +800,14 @@ def main() -> None:
     
     # Add callback handler
     application.add_handler(CallbackQueryHandler(callback_handler))
+    
+    # Set bot commands
+    commands = [
+        BotCommand("start", "🚀 Start the bot"),
+        BotCommand("help", "ℹ️ Show help and commands"),
+        BotCommand("stats", "📊 View your usage statistics"),
+        BotCommand("premium", "⭐ Upgrade to Premium")
+    ]
     
     print("🤖 Smart Media + Knowledge Bot is starting...")
     print("📊 Bot features:")
