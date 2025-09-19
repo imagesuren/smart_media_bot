@@ -1,6 +1,6 @@
+cat > requirements.txt << 'EOF'
 python-telegram-bot==21.5
-yt-dlp
-requests
-httpx
 python-dotenv
+requests
+yt-dlp
 beautifulsoup4
